@@ -42,8 +42,8 @@ if not DEEPSEEK_API_KEY:
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:3099/send-text")
-ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "")
-SMARTPAY_WEBHOOK_SECRET = os.environ.get("SMARTPAY_WEBHOOK_SECRET", "")
+ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "584164117331")
+SMARTPAY_WEBHOOK_SECRET = os.environ.get("SMARTPAY_WEBHOOK_SECRET", "whsec_d8709bbf0cd7010ffc9d76925c45babbcf7f61b2083ed5aa98601bcf42655239")
 PORT = int(os.environ.get("PORT", 8000))
 LOG_MAX = 500
 
