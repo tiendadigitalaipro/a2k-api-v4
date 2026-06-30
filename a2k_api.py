@@ -43,6 +43,7 @@ if not DEEPSEEK_API_KEY:
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:3099/send-text")
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "")
+SMARTPAY_WEBHOOK_SECRET = os.environ.get("SMARTPAY_WEBHOOK_SECRET", "")
 PORT = int(os.environ.get("PORT", 8000))
 LOG_MAX = 500
 
@@ -304,11 +305,27 @@ a{{color:#00B4FF}}</style></head><body>
 
         # ─── WEBHOOK SMARTPAY / APOLO PAY ───
         elif path == "/webhook/smartpay":
-            pago_id  = data.get("transaction_id", data.get("id", data.get("reference", data.get("referencia", "?"))))
-            monto    = data.get("amount", data.get("monto", data.get("total", "?")))
-            estado   = str(data.get("status", data.get("estado", "aprobado"))).lower()
-            cliente  = data.get("customer_name", data.get("nombre", data.get("payer", data.get("pagador", "Cliente"))))
-            log_event("smartpay_webhook", {"id": pago_id, "monto": monto, "estado": estado, "cliente": cliente, "raw": data})
+            # Verificar firma con secreto whsec_
+            if SMARTPAY_WEBHOOK_SECRET:
+                firma = self.headers.get("X-Signature", self.headers.get("X-Webhook-Signature", ""))
+                clave = SMARTPAY_WEBHOOK_SECRET.replace("whsec_", "")
+                raw   = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                firma_ok = hmac.compare_digest(
+                    hmac.new(clave.encode(), raw, hashlib.sha256).hexdigest(),
+                    firma
+                ) if firma else True
+                if not firma_ok:
+                    log_event("smartpay_webhook", {"error": "firma invalida"}, "error")
+                    return self._json({"status": "error", "msg": "firma invalida"}, 401)
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = {}
+            pago_id = data.get("transaction_id", data.get("id", data.get("reference", data.get("referencia", "?"))))
+            monto   = data.get("amount", data.get("monto", data.get("total", "?")))
+            estado  = str(data.get("status", data.get("estado", "aprobado"))).lower()
+            cliente = data.get("customer_name", data.get("nombre", data.get("payer", data.get("pagador", "Cliente"))))
+            log_event("smartpay_webhook", {"id": pago_id, "monto": monto, "estado": estado, "cliente": cliente})
             if ADMIN_PHONE and estado in ("approved", "aprobado", "success", "exitoso", "completed", "pagado"):
                 msg_admin = (
                     f"💰 *PAGO RECIBIDO — SmartPay* ✅\n"
