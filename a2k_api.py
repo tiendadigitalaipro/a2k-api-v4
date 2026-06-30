@@ -10,17 +10,16 @@ Funciona en: Railway, Render, Fly.io, VPS, tu PC.
 Solo necesita la API Key de DeepSeek.
 
 Endpoints:
-  POST /api/faq           → Consulta FAQ con DeepSeek
-  POST /api/product       → Registrar nuevo producto
-  POST /api/order         → Confirmar pedido + WhatsApp
-  POST /api/ship          → Actualizar envío + WhatsApp
-  POST /api/review        → Solicitar calificación + WhatsApp
-  POST /api/cart          → Recuperar carrito abandonado + WhatsApp
-  POST /api/whatsapp      → Enviar mensaje WhatsApp directo
-  POST /webhook/smartpay  → Webhook SmartPay / Apolo Pay
-  GET  /api/logs          → Ver historial de eventos
-  GET  /api/status        → Health check del sistema
-  GET  /                  → Landing page mínima de la API
+  POST /api/faq      → Consulta FAQ con DeepSeek
+  POST /api/product  → Registrar nuevo producto
+  POST /api/order    → Confirmar pedido + WhatsApp
+  POST /api/ship     → Actualizar envío + WhatsApp
+  POST /api/review   → Solicitar calificación + WhatsApp
+  POST /api/cart     → Recuperar carrito abandonado + WhatsApp
+  POST /api/whatsapp → Enviar mensaje WhatsApp directo
+  GET  /api/logs     → Ver historial de eventos
+  GET  /api/status   → Health check del sistema
+  GET  /             → Landing page mínima de la API
 """
 
 import os, sys, json, time, hashlib, hmac
@@ -34,6 +33,10 @@ import urllib.request
 # ═══════════════════════════════════════════════
 
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+SMART_PAY_WEBHOOK_SECRET = os.environ.get("SMART_PAY_WEBHOOK_SECRET", "whsec_d8709bbf0cd7010ffc9d76925c45babbcf7f61b2083ed5aa98601bcf42655239")
+SMART_PAY_PUBLIC_KEY = "pk_9c96d466a81d6cd9d3b17b6451619fe4"
+SMART_PAY_SECRET_KEY = "sk_b73fc66ce47470eae1aa7f800012df624de6a3b62b0b820e9987c82b3ae4c83f"
+BSC_WALLET = "0x55a5d29633e64a7734db9f96c305e3883457fc64"
 if not DEEPSEEK_API_KEY:
     print("❌ ERROR: Debes definir DEEPSEEK_API_KEY")
     print("   export DEEPSEEK_API_KEY='sk-tu-key-aqui'")
@@ -43,7 +46,6 @@ if not DEEPSEEK_API_KEY:
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:3099/send-text")
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "584164117331")
-SMARTPAY_WEBHOOK_SECRET = os.environ.get("SMARTPAY_WEBHOOK_SECRET", "whsec_d8709bbf0cd7010ffc9d76925c45babbcf7f61b2083ed5aa98601bcf42655239")
 PORT = int(os.environ.get("PORT", 8000))
 LOG_MAX = 500
 
@@ -296,6 +298,27 @@ a{{color:#00B4FF}}</style></head><body>
             return self._json({"status": "ok" if ok else "error", "action": "recordatorio"})
 
         # ─── WHATSAPP DIRECTO ───
+        elif path == "/api/smartpay-checkout":
+            # Crear orden de pago con Smart Pay
+            amount = data.get("amount", data.get("monto", "0"))
+            concept = data.get("concept", data.get("concepto", "Pago A2K Digital Studio"))
+            customer = data.get("customer", data.get("cliente", "Cliente"))
+            log_event("smartpay_checkout", {"amount": amount, "concept": concept})
+            return self._json({
+                "status": "ok",
+                "payment": {
+                    "amount": amount,
+                    "currency": "USDT",
+                    "concept": concept,
+                    "customer": customer,
+                    "wallet": BSC_WALLET,
+                    "network": "BEP-20 (Binance Smart Chain)",
+                    "public_key": SMART_PAY_PUBLIC_KEY,
+                    "webhook": "https://a2k-api-v4.onrender.com/webhook/smartpay"
+                },
+                "instructions": f"Transfiere {amount} USDT (BEP-20) a: {BSC_WALLET}"
+            })
+
         elif path == "/api/whatsapp":
             phone = data.get("to", data.get("phone", ""))
             msg = data.get("message", "")
@@ -303,39 +326,23 @@ a{{color:#00B4FF}}</style></head><body>
             log_event("whatsapp", {"to": phone, "ok": ok})
             return self._json({"status": "ok" if ok else "error", "action": "enviado", "to": phone.replace("+", "")})
 
-        # ─── WEBHOOK SMARTPAY / APOLO PAY ───
         elif path == "/webhook/smartpay":
-            # Verificar firma con secreto whsec_
-            if SMARTPAY_WEBHOOK_SECRET:
-                firma = self.headers.get("X-Signature", self.headers.get("X-Webhook-Signature", ""))
-                clave = SMARTPAY_WEBHOOK_SECRET.replace("whsec_", "")
-                raw   = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                firma_ok = hmac.compare_digest(
-                    hmac.new(clave.encode(), raw, hashlib.sha256).hexdigest(),
-                    firma
-                ) if firma else True
-                if not firma_ok:
-                    log_event("smartpay_webhook", {"error": "firma invalida"}, "error")
-                    return self._json({"status": "error", "msg": "firma invalida"}, 401)
-                try:
-                    data = json.loads(raw)
-                except Exception:
-                    data = {}
-            pago_id = data.get("transaction_id", data.get("id", data.get("reference", data.get("referencia", "?"))))
-            monto   = data.get("amount", data.get("monto", data.get("total", "?")))
-            estado  = str(data.get("status", data.get("estado", "aprobado"))).lower()
-            cliente = data.get("customer_name", data.get("nombre", data.get("payer", data.get("pagador", "Cliente"))))
-            log_event("smartpay_webhook", {"id": pago_id, "monto": monto, "estado": estado, "cliente": cliente})
-            if ADMIN_PHONE and estado in ("approved", "aprobado", "success", "exitoso", "completed", "pagado"):
-                msg_admin = (
-                    f"💰 *PAGO RECIBIDO — SmartPay* ✅\n"
-                    f"👤 Cliente: {cliente}\n"
-                    f"💵 Monto: ${monto}\n"
-                    f"🔖 Ref: {pago_id}\n"
-                    f"⏰ {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC"
-                )
-                send_whatsapp(ADMIN_PHONE, msg_admin)
-            return self._json({"status": "ok", "received": True})
+            # Verificar firma
+            signature = self.headers.get("X-SmartPay-Signature", "")
+            if signature and SMART_PAY_WEBHOOK_SECRET:
+                expected = hmac.new(SMART_PAY_WEBHOOK_SECRET.encode(), json.dumps(data).encode(), hashlib.sha256).hexdigest()
+                if signature != expected:
+                    log_event("smartpay_invalid", {"reason": "bad signature"})
+                    return self._json({"error": "invalid signature"}, 401)
+            log_event("smartpay", data)
+            tx = data.get("transaction", data.get("tx", data.get("id", "?")))
+            status = data.get("status", data.get("estado", "completado"))
+            amount = data.get("amount", data.get("monto", "?"))
+            currency = data.get("currency", data.get("moneda", "USDT"))
+            print(f"  💰 Smart Pay: {tx} | {status} | {amount} {currency}")
+            if status in ("completed", "completado", "success", "exitoso"):
+                print(f"  ✅ Pago CONFIRMADO: {amount} {currency}")
+            return self._json({"status": "ok", "received": True, "transaction": tx})
 
         else:
             return self._json({"error": "endpoint no encontrado"}, 404)
