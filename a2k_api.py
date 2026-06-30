@@ -10,16 +10,17 @@ Funciona en: Railway, Render, Fly.io, VPS, tu PC.
 Solo necesita la API Key de DeepSeek.
 
 Endpoints:
-  POST /api/faq      → Consulta FAQ con DeepSeek
-  POST /api/product  → Registrar nuevo producto
-  POST /api/order    → Confirmar pedido + WhatsApp
-  POST /api/ship     → Actualizar envío + WhatsApp
-  POST /api/review   → Solicitar calificación + WhatsApp
-  POST /api/cart     → Recuperar carrito abandonado + WhatsApp
-  POST /api/whatsapp → Enviar mensaje WhatsApp directo
-  GET  /api/logs     → Ver historial de eventos
-  GET  /api/status   → Health check del sistema
-  GET  /             → Landing page mínima de la API
+  POST /api/faq           → Consulta FAQ con DeepSeek
+  POST /api/product       → Registrar nuevo producto
+  POST /api/order         → Confirmar pedido + WhatsApp
+  POST /api/ship          → Actualizar envío + WhatsApp
+  POST /api/review        → Solicitar calificación + WhatsApp
+  POST /api/cart          → Recuperar carrito abandonado + WhatsApp
+  POST /api/whatsapp      → Enviar mensaje WhatsApp directo
+  POST /webhook/smartpay  → Webhook SmartPay / Apolo Pay
+  GET  /api/logs          → Ver historial de eventos
+  GET  /api/status        → Health check del sistema
+  GET  /                  → Landing page mínima de la API
 """
 
 import os, sys, json, time, hashlib, hmac
@@ -41,6 +42,7 @@ if not DEEPSEEK_API_KEY:
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:3099/send-text")
+ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "")
 PORT = int(os.environ.get("PORT", 8000))
 LOG_MAX = 500
 
@@ -299,6 +301,24 @@ a{{color:#00B4FF}}</style></head><body>
             ok = send_whatsapp(phone, msg)
             log_event("whatsapp", {"to": phone, "ok": ok})
             return self._json({"status": "ok" if ok else "error", "action": "enviado", "to": phone.replace("+", "")})
+
+        # ─── WEBHOOK SMARTPAY / APOLO PAY ───
+        elif path == "/webhook/smartpay":
+            pago_id  = data.get("transaction_id", data.get("id", data.get("reference", data.get("referencia", "?"))))
+            monto    = data.get("amount", data.get("monto", data.get("total", "?")))
+            estado   = str(data.get("status", data.get("estado", "aprobado"))).lower()
+            cliente  = data.get("customer_name", data.get("nombre", data.get("payer", data.get("pagador", "Cliente"))))
+            log_event("smartpay_webhook", {"id": pago_id, "monto": monto, "estado": estado, "cliente": cliente, "raw": data})
+            if ADMIN_PHONE and estado in ("approved", "aprobado", "success", "exitoso", "completed", "pagado"):
+                msg_admin = (
+                    f"💰 *PAGO RECIBIDO — SmartPay* ✅\n"
+                    f"👤 Cliente: {cliente}\n"
+                    f"💵 Monto: ${monto}\n"
+                    f"🔖 Ref: {pago_id}\n"
+                    f"⏰ {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC"
+                )
+                send_whatsapp(ADMIN_PHONE, msg_admin)
+            return self._json({"status": "ok", "received": True})
 
         else:
             return self._json({"error": "endpoint no encontrado"}, 404)
